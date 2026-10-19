@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">AudiFiya</string>
+    <string name="title_activity_main">AudiFiya</string>
+    <string name="package_name">com.audifiya.app</string>
+    <string name="custom_url_scheme">com.audifiya.app</string>
+</resources>

@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /audifiya-admin-panel
+
+Sitemap: https://audifiya.lovable.app/sitemap.xml

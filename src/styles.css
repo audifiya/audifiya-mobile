@@ -1,0 +1,352 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-base: var(--base);
+  --color-surface-main: var(--surface-main);
+  --color-surface-card: var(--surface-card);
+  --color-surface-card-hover: var(--surface-card-hover);
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-card: var(--surface-card);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--surface-main);
+  --color-popover-foreground: var(--foreground);
+  --color-primary: var(--brand);
+  --color-primary-foreground: #000000;
+  --color-secondary: var(--surface-card);
+  --color-secondary-foreground: var(--foreground);
+  --color-muted: var(--surface-card);
+  --color-muted-foreground: var(--text-secondary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-accent: var(--surface-card-hover);
+  --color-accent-foreground: var(--foreground);
+  --color-destructive: oklch(0.62 0.24 27);
+  --color-destructive-foreground: #ffffff;
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--brand);
+  --color-glass-dock: var(--glass-dock);
+  --color-glass-player: var(--glass-player);
+  --color-glass-rim: var(--glass-rim);
+  --color-glass-lens: var(--glass-lens);
+  --color-glass-lens-rim: var(--glass-lens-rim);
+  --color-glass-progress-track: var(--glass-progress-track);
+  --color-glass-progress: var(--glass-progress);
+  --font-sans: "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+}
+
+:root {
+  --radius: 8px;
+  --base: #000000;
+  --background: #000000;
+  --foreground: #ffffff;
+  --surface-main: #121212;
+  --surface-card: #181818;
+  --surface-card-hover: #242424;
+  --brand: #1ed760;
+  --brand-hover: #1fdf64;
+  --text-secondary: #b3b3b3;
+  --text-muted: #6a6a6a;
+  --border: #292929;
+  --glass-dock: oklch(0.25 0.025 264 / 0.82);
+  --glass-player: oklch(0.22 0.022 264 / 0.88);
+  --glass-rim: oklch(0.86 0.02 264 / 0.2);
+  --glass-lens: oklch(0.87 0.04 100 / 0.22);
+  --glass-lens-rim: oklch(0.94 0.02 100 / 0.18);
+  --glass-progress-track: oklch(1 0 0 / 0.18);
+  --glass-progress: oklch(0.9 0.12 110 / 0.95);
+  --shadow-glass-dock: 0 18px 45px oklch(0 0 0 / 0.55), inset 0 1px 0 oklch(1 0 0 / 0.12);
+  --shadow-glass-player: 0 12px 34px oklch(0 0 0 / 0.48), inset 0 1px 0 oklch(1 0 0 / 0.1);
+  --shadow-glass-lens: 0 10px 30px rgba(0, 0, 0, 0.46), inset 0 2px 5px rgba(255, 255, 255, 0.3), inset 0 0 20px rgba(255, 255, 255, 0.1);
+  --glass-lens: rgba(255, 255, 255, 0.055);
+  --glass-lens-rim: rgba(255, 255, 255, 0.2);
+  --glass-sheen: linear-gradient(135deg, rgba(255, 255, 255, 0.055) 0%, rgba(9, 9, 11, 0.25) 100%);
+  --glass-liquid-rim: rgba(255, 255, 255, 0.1);
+  --shadow-glass-liquid: 0 18px 38px rgba(0, 0, 0, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.16), inset 0 -1px 1px rgba(0, 0, 0, 0.32);
+  --glass-progress-gradient: linear-gradient(90deg, #2dd4bf, #34d399);
+  --shadow-glass-progress: 0 0 12px rgba(45, 212, 191, 0.6);
+  --glass-dock-clear: rgba(0, 0, 0, 0.32);
+  --shadow-glass-dock-clear: 0 24px 52px rgba(0, 0, 0, 0.56), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+  --glass-pill: rgba(0, 0, 0, 0.15);
+  --player-wash: linear-gradient(180deg, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.6));
+  --lyric-rock: #ef4444;
+  --lyric-melodic: #fda4af;
+  --lyric-melodic-glow: rgba(244, 114, 182, 0.5);
+  --player-track: rgba(255, 255, 255, 0.2);
+  --player-fill: #ffffff;
+}
+
+@utility glass-liquid {
+  background: var(--glass-sheen);
+  backdrop-filter: blur(22px) saturate(180%);
+  border: 1px solid var(--glass-liquid-rim);
+  box-shadow: var(--shadow-glass-liquid);
+}
+
+@utility glass-dock {
+  background: var(--glass-dock-clear);
+  backdrop-filter: blur(30px) saturate(175%);
+  border: 1px solid var(--glass-liquid-rim);
+  box-shadow: var(--shadow-glass-dock-clear);
+}
+
+@utility glass-refractive-lens {
+  background: var(--glass-lens);
+  border: 1px solid var(--glass-lens-rim);
+  box-shadow: var(--shadow-glass-lens);
+}
+
+@utility glass-pill {
+  background: var(--glass-pill);
+  backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid var(--glass-liquid-rim);
+}
+
+@utility glass-progress-glow {
+  background: var(--glass-progress-gradient);
+  box-shadow: var(--shadow-glass-progress);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html, body, #root {
+    height: 100%;
+    background-color: var(--color-base);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+  }
+  body {
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* ---------- Mobile (Capacitor) safe areas ---------- */
+:root {
+  /* Capacitor's SystemBars plugin injects --safe-area-inset-* on Android because
+     Android WebView < 140 reports 0 for env(safe-area-inset-*). env() is the
+     fallback (iOS, newer WebViews, desktop = 0px). */
+  --safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --safe-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+  --safe-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+  --safe-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
+}
+
+/* Main app wrapper (src/routes/__root.tsx): keeps content clear of the status bar /
+   camera cutout at the top and the gesture-navigation pill at the bottom. */
+.app-safe-area {
+  padding-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  padding-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+}
+
+/* Helpers for position: fixed bars (tab bar, mini player...) that sit outside the wrapper's padding */
+@utility pt-safe { padding-top: var(--safe-top); }
+@utility pb-safe { padding-bottom: var(--safe-bottom); }
+@utility top-safe { top: var(--safe-top); }
+@utility bottom-safe { bottom: var(--safe-bottom); }
+
+.brand-gradient-text {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-brand) 0%,
+    #34d399 55%,
+    #0ea5a0 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.brand-tagline {
+  font-family: "Great Vibes", "Figtree", cursive;
+  color: color-mix(in oklab, var(--color-brand) 70%, white 30%);
+  opacity: 0.85;
+}
+
+@utility no-scrollbar {
+  &::-webkit-scrollbar { display: none; }
+  scrollbar-width: none;
+}
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@utility skeleton {
+  background-color: var(--color-surface-card);
+  border-radius: 6px;
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* ---------- Liquid glass theme (dark) ---------- */
+html.liquid-dark-theme {
+  --base: rgba(255, 255, 255, 0.04);
+  --surface-main: rgba(255, 255, 255, 0.06);
+  --surface-card: rgba(255, 255, 255, 0.07);
+  --surface-card-hover: rgba(255, 255, 255, 0.12);
+  --border: rgba(255, 255, 255, 0.12);
+}
+
+html.liquid-dark-theme,
+html.liquid-dark-theme body {
+  background-color: #000000;
+  /* Radial glows only, all viewport-fixed so the background always
+     spans the full dynamic viewport height. */
+  background-image:
+    radial-gradient(circle at top left, rgba(30, 215, 96, 0.25), transparent 42%),
+    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.28), transparent 45%),
+    radial-gradient(circle at 60% 20%, rgba(168, 85, 247, 0.18), transparent 40%);
+  background-attachment: fixed;
+}
+
+html.liquid-dark-theme body > div {
+  background-color: transparent !important;
+}
+
+html.liquid-dark-theme aside > div,
+html.liquid-dark-theme main > div,
+html.liquid-dark-theme header,
+html.liquid-dark-theme footer {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+  backdrop-filter: blur(40px) saturate(140%);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+/* ---------- Liquid glass theme (light) ---------- */
+html.liquid-light-theme {
+  --base: rgba(255, 255, 255, 0.5);
+  --background: #f5f5f7;
+  --foreground: #111114;
+  --surface-main: rgba(255, 255, 255, 0.6);
+  --surface-card: rgba(255, 255, 255, 0.65);
+  --surface-card-hover: rgba(0, 0, 0, 0.06);
+  --text-secondary: #55555d;
+  --text-muted: #86868b;
+  --border: rgba(0, 0, 0, 0.08);
+  --brand: #0f9d58;
+  --brand-hover: #12b268;
+  --glass-dock: oklch(0.98 0.012 264 / 0.72);
+  --glass-player: oklch(0.99 0.008 264 / 0.78);
+  --glass-rim: oklch(0.28 0.02 264 / 0.12);
+  --glass-lens: oklch(0.3 0.03 264 / 0.11);
+  --glass-lens-rim: oklch(0.2 0.02 264 / 0.1);
+  --glass-progress-track: oklch(0.15 0.01 264 / 0.12);
+  --glass-progress: oklch(0.5 0.16 145 / 0.95);
+  --shadow-glass-dock: 0 18px 42px oklch(0.25 0.03 264 / 0.16), inset 0 1px 0 oklch(1 0 0 / 0.72);
+  --shadow-glass-player: 0 12px 30px oklch(0.25 0.03 264 / 0.14), inset 0 1px 0 oklch(1 0 0 / 0.65);
+  --shadow-glass-lens: 0 10px 28px rgba(30, 40, 60, 0.16), inset 0 2px 5px rgba(255, 255, 255, 0.72), inset 0 0 18px rgba(255, 255, 255, 0.34);
+  --glass-lens: rgba(255, 255, 255, 0.18);
+  --glass-lens-rim: rgba(255, 255, 255, 0.62);
+  --glass-sheen: linear-gradient(135deg, rgba(255, 255, 255, 0.36) 0%, rgba(235, 240, 248, 0.2) 100%);
+  --glass-liquid-rim: rgba(255, 255, 255, 0.54);
+  --shadow-glass-liquid: 0 18px 36px rgba(30, 40, 60, 0.17), inset 0 1px 1px rgba(255, 255, 255, 0.74), inset 0 -1px 1px rgba(30, 40, 60, 0.07);
+  --glass-progress-gradient: linear-gradient(90deg, #14b8a6, #10b981);
+  --shadow-glass-progress: 0 0 10px rgba(20, 184, 166, 0.45);
+  --glass-dock-clear: rgba(255, 255, 255, 0.28);
+  --shadow-glass-dock-clear: 0 22px 46px rgba(30, 40, 60, 0.2), inset 0 1px 1px rgba(255, 255, 255, 0.78);
+  --glass-pill: rgba(255, 255, 255, 0.35);
+  --player-wash: linear-gradient(180deg, rgba(255, 255, 255, 0.25), rgba(255, 255, 255, 0.7));
+  --lyric-rock: #dc2626;
+  --lyric-melodic: #e11d74;
+  --lyric-melodic-glow: rgba(225, 29, 116, 0.35);
+  --player-track: rgba(0, 0, 0, 0.15);
+  --player-fill: #111114;
+}
+
+html.liquid-light-theme,
+html.liquid-light-theme body {
+  background-color: #f5f5f7;
+  color: #111114;
+  background-image:
+    radial-gradient(circle at top left, rgba(30, 215, 96, 0.18), transparent 42%),
+    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 45%),
+    radial-gradient(circle at 60% 20%, rgba(168, 85, 247, 0.12), transparent 40%);
+  background-attachment: fixed;
+}
+
+html.liquid-light-theme body > div {
+  background-color: transparent !important;
+}
+
+html.liquid-light-theme aside > div,
+html.liquid-light-theme main > div,
+html.liquid-light-theme header,
+html.liquid-light-theme footer {
+  background-color: rgba(255, 255, 255, 0.6) !important;
+  backdrop-filter: blur(40px) saturate(200%);
+  border-color: rgba(0, 0, 0, 0.05);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.05);
+  color: #111114;
+}
+
+
+
+/* CSS pseudo-visualizer bars (no Web Audio API involved) */
+@keyframes eq {
+  0% {
+    height: 4px;
+  }
+  50% {
+    height: 100%;
+  }
+  100% {
+    height: 4px;
+  }
+}
+
+.wave-bar {
+  height: 4px;
+  animation-name: eq;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+}
+
+@keyframes marquee {
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-100%); }
+}
+.animate-marquee {
+  display: inline-block;
+  white-space: nowrap;
+  animation: marquee 10s linear infinite;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wave-bar,
+  .animate-marquee {
+    animation: none;
+  }
+}

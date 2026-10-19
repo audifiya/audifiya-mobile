@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "AudiFiya",
+  "version": "1.0.0",
+  "description": "AudiFiya – Feel Every Beat. Stream music in Chrome's side panel.",
+  "permissions": ["sidePanel", "offscreen", "storage"],
+  "host_permissions": [
+    "https://jiosavan-api2.vercel.app/*",
+    "https://lrc.red/*",
+    "https://ojuckezdjdptldwjcbvr.supabase.co/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "side_panel": { "default_path": "index.html" },
+  "action": { "default_title": "Open AudiFiya", "default_icon": "icon128.png" },
+  "icons": { "48": "icon48.png", "128": "icon128.png" }
+}
