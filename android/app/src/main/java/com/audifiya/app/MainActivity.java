@@ -1,5 +1,6 @@
 package com.audifiya.app;
 
+import com.audifiya.app.PlaybackServicePlugin;
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
 

@@ -1,6 +1,7 @@
 // Replace the package with your app's package (the appId in capacitor.config.ts),
 // and put this file in android/app/src/main/java/<your/package/path>/
 package com.example.app;
+import com.audifiya.app.R;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
