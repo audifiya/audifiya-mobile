@@ -1,7 +1,6 @@
 import { isExtension } from "./extension-env";
 import { create } from "zustand";
-import { Capacitor, registerPlugin } from "@capacitor/core";
-import { NativeAudio } from "@capgo/capacitor-native-audio";
+import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import {
   fetchRecommendations,
   fetchSongById,
@@ -114,9 +113,7 @@ export const usePlayback = create<PlaybackState>((set, get) => ({
     const idx = rates.indexOf(cur);
     const nextRate = rates[(idx + 1) % rates.length] ?? 1;
     if (isNative()) {
-      if (currentAssetId) {
-        NativeAudio.setRate({ assetId: currentAssetId, rate: nextRate }).catch(noop);
-      }
+      PlaybackService.setRate({ rate: nextRate }).catch(noop);
     } else {
       const audio = get().audioNode;
       if (audio) audio.playbackRate = nextRate;
@@ -157,8 +154,13 @@ export const usePlayback = create<PlaybackState>((set, get) => ({
       isMuted: volume === 0,
       isAutoPlayEnabled: autoplay,
     });
-    // Native shell: make sure the plugin is configured (idempotent).
-    void initNativeAudio();
+    if (isNative()) {
+      // Native shell: subscribe to the playback service's events (idempotent).
+      void initNativeAudio();
+    } else {
+      // Web / Electron: mirror the <audio> element's time + duration into the store.
+      syncWebAudioToStore(node);
+    }
   },
 
   playContext: (queue, index, source, presetUrl) => {
@@ -181,10 +183,13 @@ export const usePlayback = create<PlaybackState>((set, get) => ({
     if (playSource === "search") {
       try { pushPlaybackHistory(track); } catch { /* noop */ }
     }
-    if (!src) return;
     if (isNative()) {
-      void nativePlayTrack(track, src);
-    } else if (audio) {
+      // The service plays from a native queue; it resolves a missing URL itself.
+      void nativeStartContext(track, index, src);
+      return;
+    }
+    if (!src) return;
+    if (audio) {
       audio.src = src;
       audio.playbackRate = get().playbackRate;
       startPlayback(audio);
@@ -209,12 +214,14 @@ export const usePlayback = create<PlaybackState>((set, get) => ({
     }
     queue.splice(cursor + 1, 0, song);
     set({ queue, currentQueueIndex: cursor, nextTrackData: null });
+    // Native: the queued-ahead tracks were planned from the old order; re-plan them.
+    if (isNative()) void resetNativeUpcoming();
   },
 
   togglePlay: () => {
     if (!get().currentTrack) return;
     if (isNative()) {
-      void nativeTogglePlay();
+      nativeTogglePlay();
       return;
     }
     const audio = get().audioNode;
@@ -224,19 +231,26 @@ export const usePlayback = create<PlaybackState>((set, get) => ({
   },
 
   next: () => {
+    if (isNative()) {
+      void nativeNext();
+      return;
+    }
     const s = get();
-    if (!isNative() && !s.audioNode) return;
+    const audio = s.audioNode;
+    if (!audio) return;
 
     // Repeat one: restart current track
     if (s.isRepeatMode === 2 && s.currentTrack) {
-      restartCurrentTrack();
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
       return;
     }
 
     const queue = s.queue;
     if (queue.length === 0) {
       if (s.currentTrack) {
-        pauseOutput(true);
+        audio.currentTime = 0;
+        audio.pause();
         set({ isPlaying: false });
       }
       return;
@@ -271,7 +285,7 @@ export const usePlayback = create<PlaybackState>((set, get) => ({
         void topUpRadio();
         return;
       } else {
-        pauseOutput(false, true);
+        audio.pause();
         set({ isPlaying: false });
         return;
       }
@@ -280,19 +294,21 @@ export const usePlayback = create<PlaybackState>((set, get) => ({
   },
 
   prev: () => {
+    if (isNative()) {
+      nativePrev();
+      return;
+    }
     const s = get();
     const audio = s.audioNode;
-    const native = isNative();
-    if (!native && !audio) return;
-    const elapsedSec = native ? nativePositionSec : audio!.currentTime;
-    if (elapsedSec > 3) {
-      rewindCurrent();
+    if (!audio) return;
+    if (audio.currentTime > 3) {
+      audio.currentTime = 0;
       return;
     }
     let idx = s.currentQueueIndex - 1;
     if (idx < 0) {
       if (s.historyStack.length === 0) {
-        rewindCurrent();
+        audio.currentTime = 0;
         return;
       }
       idx = 0;
@@ -302,7 +318,13 @@ export const usePlayback = create<PlaybackState>((set, get) => ({
 
   seekPercent: (pct) => {
     if (isNative()) {
-      void nativeSeekPercent(pct);
+      const s = get();
+      const duration = nativeDurationSec > 0 ? nativeDurationSec : s.duration;
+      if (duration <= 0) return;
+      const seconds = Math.max(0, Math.min(1, pct)) * duration;
+      nativePositionSec = seconds;
+      set({ currentTime: seconds });
+      PlaybackService.seekTo({ positionMs: Math.round(seconds * 1000) }).catch(noop);
       return;
     }
     const audio = get().audioNode;
@@ -313,9 +335,7 @@ export const usePlayback = create<PlaybackState>((set, get) => ({
   setVolume: (v) => {
     const vol = Math.max(0, Math.min(1, v));
     if (isNative()) {
-      if (currentAssetId) {
-        NativeAudio.setVolume({ assetId: currentAssetId, volume: vol }).catch(noop);
-      }
+      PlaybackService.setVolume({ volume: vol }).catch(noop);
     } else {
       const audio = get().audioNode;
       if (audio) audio.volume = vol;
@@ -334,130 +354,149 @@ export const usePlayback = create<PlaybackState>((set, get) => ({
     if (!native && !audio) return;
     const muted = !get().isMuted;
     if (native) {
-      if (currentAssetId) {
-        NativeAudio.setVolume({
-          assetId: currentAssetId,
-          volume: muted ? 0 : get().volume,
-        }).catch(noop);
-      }
+      PlaybackService.setVolume({ volume: muted ? 0 : get().volume }).catch(noop);
     } else if (audio) {
       audio.muted = muted;
     }
     set({ isMuted: muted });
   },
 
-  toggleShuffle: () =>
-    set({ isShuffleActive: !get().isShuffleActive, nextTrackData: null }),
+  toggleShuffle: () => {
+    set({ isShuffleActive: !get().isShuffleActive, nextTrackData: null });
+    if (isNative()) void resetNativeUpcoming();
+  },
 
-  cycleRepeat: () =>
-    set({
-      isRepeatMode: ((get().isRepeatMode + 1) % 3) as RepeatMode,
-      nextTrackData: null,
-    }),
+  cycleRepeat: () => {
+    const mode = ((get().isRepeatMode + 1) % 3) as RepeatMode;
+    set({ isRepeatMode: mode, nextTrackData: null });
+    if (isNative()) {
+      PlaybackService.setRepeatMode({ mode: mode === 2 ? "one" : "off" }).catch(noop);
+      void resetNativeUpcoming();
+    }
+  },
 
   clearNextTrack: () => set({ nextTrackData: null }),
 }));
 
 /* -------------------------------------------------------------------------- */
-/*  Output helpers (HTML5 <audio> on web/Electron, NativeAudio on native)     */
+/*  Web / Electron: mirror <audio> time + duration into the store             */
 /* -------------------------------------------------------------------------- */
 
-/** Restart the current track from 0 and keep playing (repeat-one). */
-function restartCurrentTrack() {
-  if (isNative()) {
-    void replayCurrentNative(0);
-    return;
-  }
-  const audio = usePlayback.getState().audioNode;
-  if (!audio) return;
-  audio.currentTime = 0;
-  audio.play().catch(() => {});
-}
-
-/** Seek the current track back to 0 without changing play/pause state. */
-function rewindCurrent() {
-  if (isNative()) {
-    const id = currentAssetId;
-    if (!id) return;
-    NativeAudio.setCurrentTime({ assetId: id, time: 0 })
-      .then(() => {
-        nativePositionSec = 0;
-        usePlayback.setState({ currentTime: 0 });
-      })
-      // Asset may have been stopped/unloaded — start it over instead.
-      .catch(() => void replayCurrentNative(0));
-    return;
-  }
-  const audio = usePlayback.getState().audioNode;
-  if (audio) audio.currentTime = 0;
-}
-
 /**
- * Pause output, optionally rewinding to the start. `release` is used when the
- * queue is finished: on native it fully stops playback, clears the notification
- * and stops the Android foreground service.
+ * Keeps the store's `currentTime` and `duration` in sync with the HTML5 <audio>
+ * element, so UI (mini player, notch, expanded player, lyrics) reads them from
+ * usePlayback instead of attaching DOM listeners. The native build does the same
+ * from the playback service's `position` events.
  */
-function pauseOutput(rewind: boolean, release = false) {
-  if (isNative()) {
-    void (async () => {
-      const id = currentAssetId;
-      try {
-        if (release) {
-          await releaseNativeSession();
-        } else if (id) {
-          await NativeAudio.pause({ assetId: id });
-          if (rewind) await NativeAudio.setCurrentTime({ assetId: id, time: 0 });
-        }
-      } catch {
-        /* noop */
-      }
-    })();
-    return;
-  }
-  const audio = usePlayback.getState().audioNode;
-  if (!audio) return;
-  if (rewind) audio.currentTime = 0;
-  audio.pause();
+let detachWebSync: (() => void) | null = null;
+
+function syncWebAudioToStore(node: HTMLAudioElement) {
+  detachWebSync?.();
+
+  const syncTime = () => usePlayback.setState({ currentTime: node.currentTime || 0 });
+  const syncDuration = () => {
+    const d = node.duration;
+    usePlayback.setState({ duration: Number.isFinite(d) ? d : 0 });
+  };
+  const reset = () => usePlayback.setState({ currentTime: 0, duration: 0 });
+
+  node.addEventListener("timeupdate", syncTime);
+  node.addEventListener("seeked", syncTime);
+  node.addEventListener("loadedmetadata", syncDuration);
+  node.addEventListener("durationchange", syncDuration);
+  node.addEventListener("emptied", reset);
+  syncTime();
+  syncDuration();
+
+  detachWebSync = () => {
+    node.removeEventListener("timeupdate", syncTime);
+    node.removeEventListener("seeked", syncTime);
+    node.removeEventListener("loadedmetadata", syncDuration);
+    node.removeEventListener("durationchange", syncDuration);
+    node.removeEventListener("emptied", reset);
+  };
 }
 
 function prefetchNode(): HTMLAudioElement | null {
-  // The native player preloads its own assets, so the <audio> warm-up isn't used there.
   if (typeof document === "undefined" || isExtension() || isNative()) return null;
   return document.getElementById("prefetchAudio") as HTMLAudioElement | null;
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Native (Capacitor) audio: @capgo/capacitor-native-audio                   */
+/*  Native (Capacitor Android): PlaybackService with a native queue           */
 /* -------------------------------------------------------------------------- */
 
 /**
- * The plugin does NOT create the Android foreground service that keeps audio
- * alive with the screen locked. This is a tiny local plugin (PlaybackService.java
- * + PlaybackServicePlugin.java, see android/ folder) that starts/stops one.
+ * The Java PlaybackService owns the ExoPlayer, the MediaSession and the one
+ * notification. We hand it a queue of resolved stream URLs, so it advances from
+ * track to track on its own, even while the WebView is throttled with the screen off.
+ * JavaScript only keeps the queue topped up and mirrors state into the store.
  */
-interface PlaybackServicePlugin {
-  start(): Promise<void>;
-  stop(): Promise<void>;
+interface NativeTrack {
+  id: string;
+  url: string;
+  title: string;
+  artist: string;
+  album?: string;
+  artworkUrl?: string;
 }
+
+interface NativeEvents {
+  stateChanged: { isPlaying: boolean; state: string; index: number };
+  trackChanged: { index: number; id: string; reason: string };
+  position: { positionMs: number; durationMs: number; index: number };
+  ended: Record<string, never>;
+  error: { message: string; code?: string };
+  stopped: Record<string, never>;
+}
+
+interface PlaybackServicePlugin {
+  startService(o: { title?: string; artist?: string }): Promise<void>;
+  stopService(): Promise<void>;
+  setQueue(o: {
+    tracks: NativeTrack[];
+    startIndex?: number;
+    positionMs?: number;
+    autoPlay?: boolean;
+  }): Promise<void>;
+  addTracks(o: { tracks: NativeTrack[] }): Promise<void>;
+  removeUpcoming(): Promise<void>;
+  play(): Promise<void>;
+  pause(): Promise<void>;
+  next(): Promise<void>;
+  previous(): Promise<void>;
+  seekTo(o: { positionMs: number }): Promise<void>;
+  setVolume(o: { volume: number }): Promise<void>;
+  setRate(o: { rate: number }): Promise<void>;
+  setRepeatMode(o: { mode: "off" | "one" }): Promise<void>;
+  requestNotificationPermission(): Promise<{ granted: boolean }>;
+  addListener<K extends keyof NativeEvents>(
+    eventName: K,
+    listener: (event: NativeEvents[K]) => void,
+  ): Promise<PluginListenerHandle>;
+}
+
 const PlaybackService = registerPlugin<PlaybackServicePlugin>("PlaybackService");
-const isAndroid = () => Capacitor.getPlatform() === "android";
+
+/** How many tracks to keep queued natively ahead of the current one. */
+const NATIVE_LOOKAHEAD = 10;
 
 let nativeInit: Promise<void> | null = null;
-let fgServiceStarted = false;
-/** Incremented for every native play(); lets async work detect it was superseded. */
-let nativeToken = 0;
-/** True while a play() call is in flight, so events from the old track are ignored. */
-let nativeSwitching = false;
-let endedHandledToken = -1;
-/** Plugin asset id of the track that's current (id = String(track.id)). */
-let currentAssetId: string | null = null;
-/** Assets we've preloaded: the current track plus a prefetched next one. */
-const loadedAssets = new Set<string>();
+/** Bumped whenever a new native queue is started (supersedes in-flight starts). */
+let nativeSession = 0;
+/** Bumped whenever the upcoming part of the native queue is invalidated (supersedes top-ups). */
+let nativeEpoch = 0;
+/** The service is running with a queue. */
+let nativeActive = false;
+/** JS-queue index of every item in the native queue (same order as the native queue). */
+let nativePlan: number[] = [];
+/** Position of the current item in the native queue. */
+let nativeIndex = 0;
+let nativeTopUpBusy = false;
+let nativeTopUpQueued = false;
 let nativePositionSec = 0;
 let nativeDurationSec = 0;
-let lastStoreTimeSec = -1;
-let nativePrefetchTriggered = false;
-let nativeStopped = false;
+let notificationPermissionAsked = false;
 
 const INVALID_URL_STRINGS = new Set(["", "null", "undefined", "about:blank", "#"]);
 
@@ -508,11 +547,12 @@ function resolveArtworkUrl(track: JSSong): string | null {
   return url ? url.replace(/\b(50x50|150x150)\b/, "500x500") : null;
 }
 
-/** Metadata shown in the Android notification / lock screen media controls. */
-function buildNotificationMetadata(track: JSSong) {
+function toNativeTrack(track: JSSong, url: string): NativeTrack {
   const album = (track as unknown as { album?: { name?: unknown } }).album?.name;
   const artwork = resolveArtworkUrl(track);
   return {
+    id: String(track.id),
+    url,
     title: cleanText(track.name, "AudiFiya"),
     artist: cleanText(getArtistString(track), "Unknown artist"),
     album: cleanText(album, "AudiFiya"),
@@ -520,58 +560,27 @@ function buildNotificationMetadata(track: JSSong) {
   };
 }
 
-/**
- * Initialise the plugin once: configure it and attach the event listeners.
- * Safe to call repeatedly; every native playback path awaits it first.
- */
+/** Subscribe to the service's events once. */
 function initNativeAudio(): Promise<void> {
   if (!isNative()) return Promise.resolve();
   if (!nativeInit) {
     nativeInit = (async () => {
-      await NativeAudio.configure({
-        backgroundPlayback: true, // Android: don't auto-pause when the app is backgrounded
-        showNotification: true, // lock screen + notification controls
-        focus: true, // request audio focus so other apps pause
-        background: true,
+      await PlaybackService.addListener("stateChanged", (e) => {
+        usePlayback.setState({ isPlaying: e.isPlaying });
       });
-
-      // ~every 100 ms while playing: drives the progress bar and the 80% prefetch.
-      await NativeAudio.addListener("currentTime", ({ assetId, currentTime }) => {
-        if (assetId && assetId !== currentAssetId) return;
-        onNativeTime(currentTime);
+      await PlaybackService.addListener("position", (e) => {
+        nativePositionSec = e.positionMs / 1000;
+        nativeDurationSec = e.durationMs > 0 ? e.durationMs / 1000 : 0;
+        usePlayback.setState({ currentTime: nativePositionSec, duration: nativeDurationSec });
       });
-
-      // Fires when a track plays to its end (also with the screen locked).
-      await NativeAudio.addListener("complete", ({ assetId }) => {
-        if (assetId !== currentAssetId) return;
-        onNativeComplete();
-      });
-
-      // Keeps the UI in sync with lock screen / notification / headset buttons.
-      await NativeAudio.addListener("playbackState", (e) => {
-        if (e.assetId && e.assetId !== currentAssetId) return;
-        if (typeof e.currentTime === "number") nativePositionSec = e.currentTime;
-        if (typeof e.duration === "number" && e.duration > 0) {
-          nativeDurationSec = e.duration;
-          usePlayback.setState({ duration: e.duration });
-        }
-        if (e.state === "playing") {
-          nativeStopped = false;
-          usePlayback.setState({ isPlaying: true });
-          return;
-        }
-        if (nativeSwitching) return; // old track winding down while a new one starts
-        if (e.state === "paused") {
-          usePlayback.setState({ isPlaying: false });
-        } else if (e.state === "stopped") {
-          if (e.reason === "complete") {
-            onNativeComplete();
-          } else {
-            // e.g. the user pressed Stop in the notification
-            nativeStopped = true;
-            usePlayback.setState({ isPlaying: false });
-          }
-        }
+      await PlaybackService.addListener("trackChanged", onNativeTrackChanged);
+      await PlaybackService.addListener("ended", () => void onNativeEnded());
+      await PlaybackService.addListener("stopped", () => {
+        // Notification dismissed / stopped from outside: the native queue is gone.
+        nativeActive = false;
+        nativePlan = [];
+        nativeIndex = 0;
+        usePlayback.setState({ isPlaying: false });
       });
     })().catch(() => {
       nativeInit = null; // allow a retry on the next call
@@ -580,254 +589,291 @@ function initNativeAudio(): Promise<void> {
   return nativeInit;
 }
 
-/** Start the Android foreground service (must happen while the app is visible). */
-async function startForegroundService() {
-  if (!isAndroid() || fgServiceStarted) return;
-  try {
-    await PlaybackService.start();
-    fgServiceStarted = true;
-  } catch {
-    /* Java plugin not installed yet — playback still works while the app is open */
-  }
+/** Which JS-queue index does native item `index` (with track id `id`) correspond to? */
+function jsIndexForNative(index: number, id: string): number {
+  const queue = usePlayback.getState().queue;
+  const planned = nativePlan[index];
+  if (planned !== undefined && String(queue[planned]?.id) === id) return planned;
+  return queue.findIndex((t) => String(t.id) === id);
 }
 
-async function stopForegroundService() {
-  if (!isAndroid() || !fgServiceStarted) return;
-  fgServiceStarted = false;
-  try {
-    await PlaybackService.stop();
-  } catch {
-    /* noop */
-  }
-}
-
-/** Stop playback entirely, clear the notification and release the service. */
-async function releaseNativeSession() {
-  const id = currentAssetId;
-  nativeStopped = true;
-  try {
-    if (id) await NativeAudio.stop({ assetId: id });
-  } catch {
-    /* noop */
-  }
-  await stopForegroundService();
-}
-
-async function unloadNativeAsset(assetId: string) {
-  loadedAssets.delete(assetId);
-  try {
-    await NativeAudio.unload({ assetId });
-  } catch {
-    /* noop */
-  }
-}
-
-/** Preload a track (with lock-screen metadata). No-op if it's already loaded. */
-async function preloadNativeAsset(track: JSSong, src: string): Promise<string> {
-  const assetId = String(track.id);
-  if (loadedAssets.has(assetId)) return assetId;
-  const options = {
-    assetId,
-    assetPath: src,
-    isUrl: true,
-    notificationMetadata: buildNotificationMetadata(track),
-  };
-  try {
-    await NativeAudio.preload(options);
-  } catch {
-    // Most likely a stale asset with the same id — clear it and try once more.
-    await NativeAudio.unload({ assetId }).catch(noop);
-    await NativeAudio.preload(options);
-  }
-  loadedAssets.add(assetId);
-  return assetId;
-}
-
-/** Unload everything except the current track (frees memory/cache). */
-function pruneNativeAssets() {
-  for (const id of [...loadedAssets]) {
-    if (id === currentAssetId) continue;
-    void unloadNativeAsset(id);
-  }
-}
-
-/** Warm the next track's asset so the transition is instant, even in the background. */
-async function prefetchNativeAsset(song: JSSong, url: string) {
-  try {
-    await initNativeAudio();
-    await preloadNativeAsset(song, url);
-  } catch {
-    /* best-effort: nativePlayTrack() will preload it if this failed */
-  }
-}
-
-function applyNativeVolumeAndRate(assetId: string) {
+/** The service moved to another item (auto-advance, notification/lock-screen skip, ...). */
+function onNativeTrackChanged(e: { index: number; id: string }) {
+  nativeIndex = e.index;
+  const jsIndex = jsIndexForNative(e.index, e.id);
   const s = usePlayback.getState();
-  const vol = s.isMuted ? 0 : s.volume;
-  if (vol !== 1) NativeAudio.setVolume({ assetId, volume: vol }).catch(noop);
-  if (s.playbackRate !== 1) NativeAudio.setRate({ assetId, rate: s.playbackRate }).catch(noop);
-}
+  const track = jsIndex >= 0 ? s.queue[jsIndex] : undefined;
+  if (!track) return;
 
-async function loadNativeDuration(assetId: string, token: number) {
-  for (let i = 0; i < 12; i++) {
-    try {
-      const { duration } = await NativeAudio.getDuration({ assetId });
-      if (token !== nativeToken) return;
-      if (duration > 0) {
-        nativeDurationSec = duration;
-        usePlayback.setState({ duration });
-        return;
-      }
-    } catch {
-      /* asset may still be loading */
+  nativePositionSec = 0;
+  nativeDurationSec = 0;
+  if (jsIndex !== s.currentQueueIndex || track.id !== s.currentTrack?.id) {
+    const prev = s.currentTrack;
+    usePlayback.setState({
+      currentQueueIndex: jsIndex,
+      currentTrack: track,
+      currentTime: 0,
+      duration: 0,
+      nextTrackData: null,
+      historyStack: prev ? [...s.historyStack, prev].slice(-50) : s.historyStack,
+    });
+    if (s.playSource === "search") {
+      try { pushPlaybackHistory(track); } catch { /* noop */ }
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    if (token !== nativeToken) return;
   }
+  void topUpNativeQueue();
 }
 
-/** Native equivalent of the <audio> timeupdate handler. */
-function onNativeTime(timeSec: number) {
-  nativePositionSec = timeSec;
-  // The plugin emits ~10x/second; only push ~4 updates/second into React.
-  if (Math.abs(timeSec - lastStoreTimeSec) >= 0.25) {
-    lastStoreTimeSec = timeSec;
-    usePlayback.setState({ currentTime: timeSec });
-  }
-  // Same rule as the web build: resolve the next track at ~80%.
-  if (
-    nativeDurationSec > 0 &&
-    timeSec / nativeDurationSec >= 0.8 &&
-    !nativePrefetchTriggered
-  ) {
-    nativePrefetchTriggered = true;
-    void prepareNextTrack();
-  }
+/** The native queue ran dry (JS was too slow, or the context really ended). */
+async function onNativeEnded() {
+  const added = await topUpNativeQueue(); // the service continues into new tracks by itself
+  if (added === 0) usePlayback.setState({ isPlaying: false });
 }
 
-/** Native equivalent of the <audio> `ended` handler. */
-function onNativeComplete() {
-  if (endedHandledToken === nativeToken) return; // already handled for this play()
-  endedHandledToken = nativeToken;
-  nativeStopped = true;
+/** JS-queue indexes that should follow the last planned item, honouring shuffle / repeat-all. */
+function planUpcoming(count: number): number[] {
   const s = usePlayback.getState();
-  if (s.isRepeatMode === 2) {
-    void replayCurrentNative(0);
-    return;
+  const queue = s.queue;
+  if (queue.length === 0) return [];
+  const out: number[] = [];
+  let last = nativePlan.length ? nativePlan[nativePlan.length - 1] : s.currentQueueIndex;
+  for (let n = 0; n < count; n++) {
+    let next: number;
+    if (s.isShuffleActive && queue.length > 1) {
+      do {
+        next = Math.floor(Math.random() * queue.length);
+      } while (next === last);
+    } else {
+      next = last + 1;
+      if (next >= queue.length) {
+        if (s.isRepeatMode === 1) next = 0;
+        else break;
+      }
+    }
+    out.push(next);
+    last = next;
   }
-  if (!consumeNextTrack()) s.next();
+  return out;
+}
+
+/** Song radio: append similar tracks to the JS queue. Returns how many were added. */
+async function appendRecommendations(): Promise<number> {
+  const seed = usePlayback.getState().currentTrack;
+  if (!seed) return 0;
+  try {
+    const recs = await fetchRecommendations(seed.id, getArtistString(seed));
+    const queue = usePlayback.getState().queue;
+    const fresh = recs.filter((t) => t.id !== seed.id && !queue.some((q) => q.id === t.id));
+    if (fresh.length === 0) return 0;
+    usePlayback.setState({ queue: [...usePlayback.getState().queue, ...fresh] });
+    return fresh.length;
+  } catch {
+    return 0;
+  }
 }
 
 /**
- * Play a track natively: preload it with notification metadata, then play it.
- * Preloading is skipped when the asset was already prefetched.
+ * Keep NATIVE_LOOKAHEAD tracks queued after the current one. Resolves their stream URLs
+ * and appends them to the native queue. Returns how many tracks were added.
  */
-async function nativePlayTrack(track: JSSong, src: string, positionSec = 0, retry = true) {
-  const token = ++nativeToken;
-  const assetId = String(track.id);
-  const prevAssetId = currentAssetId;
+async function topUpNativeQueue(): Promise<number> {
+  if (!isNative() || !nativeActive) return 0;
+  if (nativeTopUpBusy) {
+    nativeTopUpQueued = true;
+    return 0;
+  }
+  nativeTopUpBusy = true;
+  const epoch = nativeEpoch;
+  let added = 0;
+  try {
+    for (let round = 0; round < 2; round++) {
+      const s = usePlayback.getState();
+      const need = NATIVE_LOOKAHEAD - (nativePlan.length - 1 - nativeIndex);
+      if (need <= 0) break;
 
-  currentAssetId = assetId;
-  nativeSwitching = true;
-  nativeStopped = false;
-  nativePrefetchTriggered = false;
-  nativePositionSec = positionSec;
+      const indexes = planUpcoming(need);
+      if (indexes.length === 0) {
+        // End of the queue: song radio keeps going with similar tracks (same rule as the web build).
+        if (
+          round === 0 &&
+          s.isAutoPlayEnabled &&
+          s.playSource === "search" &&
+          s.isRepeatMode !== 1 &&
+          (await appendRecommendations()) > 0
+        ) {
+          if (epoch !== nativeEpoch) break;
+          continue;
+        }
+        break;
+      }
+
+      const resolved = await Promise.all(
+        indexes.map(async (index) => {
+          const song = usePlayback.getState().queue[index];
+          if (!song) return null;
+          const url = await resolveStreamUrl(song).catch(() => null);
+          return url ? { index, track: toNativeTrack(song, url) } : null;
+        }),
+      );
+      if (epoch !== nativeEpoch) break;
+
+      const ok = resolved.filter((r): r is { index: number; track: NativeTrack } => r !== null);
+      if (ok.length === 0) break;
+      await PlaybackService.addTracks({ tracks: ok.map((r) => r.track) });
+      if (epoch !== nativeEpoch) break;
+      nativePlan.push(...ok.map((r) => r.index));
+      added += ok.length;
+    }
+  } catch {
+    /* best-effort: the next track change tries again */
+  } finally {
+    nativeTopUpBusy = false;
+    if (nativeTopUpQueued) {
+      nativeTopUpQueued = false;
+      void topUpNativeQueue();
+    }
+  }
+  return added;
+}
+
+/** The order of upcoming tracks changed (play next / shuffle / repeat): re-plan them. */
+async function resetNativeUpcoming() {
+  if (!nativeActive) return;
+  nativeEpoch++;
+  nativePlan = nativePlan.slice(0, nativeIndex + 1);
+  if (nativePlan.length) nativePlan[nativeIndex] = usePlayback.getState().currentQueueIndex;
+  try {
+    await PlaybackService.removeUpcoming();
+  } catch {
+    /* noop */
+  }
+  void topUpNativeQueue();
+}
+
+/**
+ * Start playing a track from the JS queue: start the foreground service (notification
+ * appears immediately), send the first track, then queue the next ones behind it.
+ */
+async function nativeStartContext(track: JSSong, index: number, presetUrl?: string | null) {
+  const session = ++nativeSession;
+  nativeEpoch++;
+  nativeActive = true;
+  nativePlan = [index];
+  nativeIndex = 0;
+  nativePositionSec = 0;
   nativeDurationSec = 0;
-  lastStoreTimeSec = -1;
-  usePlayback.setState({ currentTime: positionSec, duration: 0 });
+  usePlayback.setState({ currentTime: 0, duration: 0 });
 
+  const first = toNativeTrack(track, "");
   try {
     await initNativeAudio();
-    await startForegroundService();
-    if (token !== nativeToken) return;
 
-    // Never let two tracks overlap.
-    if (prevAssetId) await NativeAudio.stop({ assetId: prevAssetId }).catch(noop);
-    // Replaying the same track: reload it so it starts from a clean state.
-    if (assetId === prevAssetId && loadedAssets.has(assetId)) {
-      await unloadNativeAsset(assetId);
+    // Android 13+: the notification is hidden unless the user allows it. Ask once.
+    if (!notificationPermissionAsked) {
+      notificationPermissionAsked = true;
+      await PlaybackService.requestNotificationPermission().catch(noop);
     }
+    if (session !== nativeSession) return;
 
-    // 1) preload (with notificationMetadata)  2) play
-    await preloadNativeAsset(track, src);
-    if (token !== nativeToken) return;
-    await NativeAudio.play({
-      assetId,
-      ...(positionSec > 0 ? { time: positionSec } : {}),
-    });
-    if (token !== nativeToken) return;
-
-    usePlayback.setState({ isPlaying: true });
-    applyNativeVolumeAndRate(assetId);
-    void loadNativeDuration(assetId, token);
-    pruneNativeAssets();
-  } catch {
-    if (token !== nativeToken) return;
-    await unloadNativeAsset(assetId);
-    if (retry) {
-      // One silent retry, like the web path.
-      setTimeout(() => {
-        if (token === nativeToken) void nativePlayTrack(track, src, positionSec, false);
-      }, 250);
-      return;
-    }
-    usePlayback.setState({ isPlaying: false });
-  } finally {
-    setTimeout(() => {
-      if (token === nativeToken) nativeSwitching = false;
-    }, 400);
-  }
-}
-
-/** Re-start the current track (repeat-one, or after the player was stopped). */
-async function replayCurrentNative(positionSec = 0) {
-  const track = usePlayback.getState().currentTrack;
-  if (!track) return;
-  const src = getStreamUrl(track) ?? (await resolveStreamUrl(track));
-  if (!src) return;
-  await nativePlayTrack(track, src, positionSec);
-}
-
-async function nativeTogglePlay() {
-  const id = currentAssetId;
-  try {
-    if (!id || nativeStopped || !loadedAssets.has(id)) {
-      // Nothing loaded, or the player was stopped (track ended / notification Stop).
-      const nearEnd = nativeDurationSec > 0 && nativeDurationSec - nativePositionSec <= 3;
-      await replayCurrentNative(nearEnd ? 0 : nativePositionSec);
-      return;
-    }
-    const { isPlaying } = await NativeAudio.isPlaying({ assetId: id });
-    if (isPlaying) {
-      await NativeAudio.pause({ assetId: id });
+    // Shows the notification right away (Android requires it within ~5 s of starting the service).
+    await PlaybackService.startService({ title: first.title, artist: first.artist });
+    const url = presetUrl ?? getStreamUrl(track) ?? (await resolveStreamUrl(track));
+    if (session !== nativeSession) return;
+    if (!url) {
       usePlayback.setState({ isPlaying: false });
-    } else {
-      await NativeAudio.resume({ assetId: id });
-      usePlayback.setState({ isPlaying: true });
+      return;
     }
+
+    await PlaybackService.setQueue({
+      tracks: [{ ...first, url }],
+      startIndex: 0,
+      autoPlay: true,
+    });
+    if (session !== nativeSession) return;
+
+    const s = usePlayback.getState();
+    PlaybackService.setVolume({ volume: s.isMuted ? 0 : s.volume }).catch(noop);
+    PlaybackService.setRate({ rate: s.playbackRate }).catch(noop);
+    PlaybackService.setRepeatMode({ mode: s.isRepeatMode === 2 ? "one" : "off" }).catch(noop);
+    usePlayback.setState({ isPlaying: true });
+
+    void topUpNativeQueue();
   } catch {
-    /* noop */
+    if (session === nativeSession) usePlayback.setState({ isPlaying: false });
   }
 }
 
-async function nativeSeekPercent(pct: number) {
-  const id = currentAssetId;
-  if (!id) return;
-  try {
-    let duration = nativeDurationSec;
-    if (duration <= 0) duration = (await NativeAudio.getDuration({ assetId: id })).duration || 0;
-    if (duration <= 0) return;
-    const time = Math.max(0, Math.min(1, pct)) * duration;
-    await NativeAudio.setCurrentTime({ assetId: id, time });
-    nativePositionSec = time;
-    usePlayback.setState({ currentTime: time });
-  } catch {
-    /* noop */
+function nativeTogglePlay() {
+  const s = usePlayback.getState();
+  if (!nativeActive) {
+    // Service is gone (e.g. its notification was dismissed): start the current track again.
+    if (s.currentTrack) {
+      void nativeStartContext(s.currentTrack, Math.max(0, s.currentQueueIndex));
+    }
+    return;
   }
+  (s.isPlaying ? PlaybackService.pause() : PlaybackService.play()).catch(noop);
+}
+
+async function nativeNext() {
+  const s = usePlayback.getState();
+  if (!nativeActive) return;
+
+  // Repeat one: restart the current track
+  if (s.isRepeatMode === 2 && s.currentTrack) {
+    PlaybackService.seekTo({ positionMs: 0 }).catch(noop);
+    PlaybackService.play().catch(noop);
+    return;
+  }
+
+  if (nativeIndex < nativePlan.length - 1) {
+    PlaybackService.next().catch(noop);
+    return;
+  }
+
+  // Nothing queued ahead: try to extend (repeat-all wrap / song radio).
+  const added = await topUpNativeQueue();
+  if (added > 0) {
+    PlaybackService.next().catch(noop);
+  } else {
+    PlaybackService.pause().catch(noop);
+    usePlayback.setState({ isPlaying: false });
+  }
+}
+
+function nativePrev() {
+  const s = usePlayback.getState();
+  if (!nativeActive) return;
+
+  if (nativePositionSec > 3) {
+    rewindNative();
+    return;
+  }
+  // The service still has the previous item: go back natively.
+  if (nativeIndex > 0) {
+    PlaybackService.previous().catch(noop);
+    return;
+  }
+  // First item of the native window: rebuild from the JS queue (same as the web build).
+  let idx = s.currentQueueIndex - 1;
+  if (idx < 0) {
+    if (s.historyStack.length === 0) {
+      rewindNative();
+      return;
+    }
+    idx = 0;
+  }
+  s.playContext(s.queue, idx);
+}
+
+function rewindNative() {
+  nativePositionSec = 0;
+  usePlayback.setState({ currentTime: 0 });
+  PlaybackService.seekTo({ positionMs: 0 }).catch(noop);
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Prefetch / radio / HTML5 playback                                         */
+/*  Prefetch / radio / HTML5 playback (web + Electron)                        */
 /* -------------------------------------------------------------------------- */
 
 /** Resolve a playable stream URL for a song, refetching details if needed. */
@@ -844,6 +890,7 @@ let prepareInFlight = false;
  * Called around 80% through the current track: resolves the next track's
  * stream URL ahead of time so the `ended` handler never touches the network
  * (mobile browsers throttle fetches while the screen is off).
+ * Web / Electron only: the native build keeps a queue ahead instead.
  */
 export async function prepareNextTrack() {
   if (prepareInFlight) return;
@@ -897,13 +944,7 @@ export async function prepareNextTrack() {
     if (now.currentTrack?.id !== s.currentTrack?.id || now.nextTrackData) return;
     usePlayback.setState({ nextTrackData: { song, url, index } });
 
-    // Native: preload the next asset so the swap is instant (even with the screen locked).
-    if (isNative()) {
-      void prefetchNativeAsset(song, url);
-      return;
-    }
-
-    // Web: warm the bytes so the swap is instant.
+    // Warm the bytes so the swap is instant.
     const buf = prefetchNode();
     if (buf && buf.src !== url) {
       try {
@@ -928,7 +969,7 @@ export function consumeNextTrack(): boolean {
   const s = usePlayback.getState();
   const buffered = s.nextTrackData;
   const audio = s.audioNode;
-  if (!buffered || (!audio && !isNative())) return false;
+  if (!buffered || !audio) return false;
   if (s.isRepeatMode === 2) return false;
   if (s.queue[buffered.index]?.id !== buffered.song.id) {
     usePlayback.setState({ nextTrackData: null });
@@ -952,7 +993,7 @@ export function consumeNextTrack(): boolean {
 /**
  * Start HTML5 playback with an explicit success/failure path so a backgrounded
  * tab still advances to the next track (browsers can reject play() when hidden).
- * Web / Electron only — the native shell goes through nativePlayTrack().
+ * Web / Electron only — the native shell plays through PlaybackService.
  */
 export function startPlayback(audio: HTMLAudioElement, retry = true) {
   audio
@@ -977,11 +1018,12 @@ export function startPlayback(audio: HTMLAudioElement, retry = true) {
 
 let radioInFlight = false;
 
-/** Fetch tracks similar to the current one and continue playback with them. */
+/** Fetch tracks similar to the current one and continue playback with them (web / Electron). */
 async function topUpRadio() {
   if (radioInFlight) return;
   const s = usePlayback.getState();
   const seed = s.currentTrack;
+  const audio = s.audioNode;
   if (!seed) return;
   radioInFlight = true;
   try {
@@ -990,14 +1032,14 @@ async function topUpRadio() {
       (t) => t.id !== seed.id && !s.queue.some((q) => q.id === t.id),
     );
     if (fresh.length === 0) {
-      pauseOutput(false, true);
+      audio?.pause();
       usePlayback.setState({ isPlaying: false });
       return;
     }
     const queue = [...usePlayback.getState().queue, ...fresh];
     usePlayback.getState().playContext(queue, queue.length - fresh.length);
   } catch {
-    pauseOutput(false, true);
+    audio?.pause();
     usePlayback.setState({ isPlaying: false });
   } finally {
     radioInFlight = false;
@@ -1011,5 +1053,5 @@ export function formatTime(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-// Initialise the native plugin as soon as the module loads (no-op on web/Electron).
+// Subscribe to the playback service's events as soon as the module loads (no-op on web/Electron).
 void initNativeAudio();
