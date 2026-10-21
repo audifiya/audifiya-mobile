@@ -373,19 +373,19 @@ public class PlaybackService extends Service {
     private final class PlayerEvents implements Player.Listener {
         @Override
         public void onIsPlayingChanged(boolean isPlaying) {
-            onPlayerStateChanged();
+            broadcastPlayerState();
             main.removeCallbacks(ticker);
             if (isLogicallyPlaying()) main.post(ticker);
         }
 
         @Override
         public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
-            onPlayerStateChanged();
+            broadcastPlayerState();
         }
 
         @Override
         public void onPlaybackStateChanged(int state) {
-            onPlayerStateChanged();
+            broadcastPlayerState();
             if (state == Player.STATE_READY) {
                 refreshMetadata(); // duration is known now
             } else if (state == Player.STATE_ENDED) {
@@ -420,7 +420,7 @@ public class PlaybackService extends Service {
         }
     }
 
-    private void onPlayerStateChanged() {
+    private void broadcastPlayerState() {
         if (player == null) return;
         updateSessionState();
         updateNotification();
